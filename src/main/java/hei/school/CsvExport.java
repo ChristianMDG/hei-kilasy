@@ -32,10 +32,19 @@ public class CsvExport {
         for (Map<String, Object> row : rows) {
             String note = "";
             if (row.get("raw_points") != null) {
-                double n = ((BigDecimal) row.get("raw_points")).doubleValue()
-                        / ((BigDecimal) row.get("max_points")).doubleValue() * 20;
-                n = Math.floor(n * 10) / 10;
-                note = String.valueOf(n).replace('.', ',');
+                BigDecimal rawPoints = (BigDecimal) row.get("raw_points");
+                BigDecimal maxPoints = (BigDecimal) row.get("max_points");
+                java.time.LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+                java.time.LocalDateTime submittedAt = ((java.sql.Timestamp) row.get("submitted_at")).toLocalDateTime();
+                // late penalty: -10% per started day late, capped at -50% (deadline = end of that day).
+                // Keep in sync with the 3 other places that compute the grade.
+                long daysLate = java.time.temporal.ChronoUnit.DAYS.between(deadline, submittedAt.toLocalDate());
+                BigDecimal penaltyPercent = BigDecimal.valueOf(Math.min(Math.max(daysLate, 0) * 10, 50));
+                BigDecimal grade = rawPoints.multiply(new BigDecimal("20"))
+                        .multiply(BigDecimal.valueOf(100).subtract(penaltyPercent))
+                        .divide(maxPoints.multiply(BigDecimal.valueOf(100)), java.math.MathContext.DECIMAL64)
+                        .setScale(1, java.math.RoundingMode.HALF_UP);
+                note = grade.toPlainString().replace('.', ',');
             }
             csv.append(row.get("reference")).append(';')
                     .append(row.get("full_name")).append(';')

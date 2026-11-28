@@ -61,9 +61,16 @@ public class GradeReport {
                     line.put("status", "EN ATTENTE DE CORRECTION");
                     line.put("grade", null);
                 } else {
-                    BigDecimal raw = (BigDecimal) row.get("raw_points");
-                    BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
+                    BigDecimal rawPoints = (BigDecimal) row.get("raw_points");
+                    BigDecimal maxPoints = (BigDecimal) row.get("max_points");
+                    // late penalty: -10% per started day late, capped at -50% (deadline = end of that day).
+                    // Keep in sync with the 3 other places that compute the grade.
+                    long daysLate = java.time.temporal.ChronoUnit.DAYS.between(deadline, submittedAt.toLocalDate());
+                    BigDecimal penaltyPercent = BigDecimal.valueOf(Math.min(Math.max(daysLate, 0) * 10, 50));
+                    BigDecimal grade = rawPoints.multiply(new BigDecimal("20"))
+                            .multiply(BigDecimal.valueOf(100).subtract(penaltyPercent))
+                            .divide(maxPoints.multiply(BigDecimal.valueOf(100)), java.math.MathContext.DECIMAL64)
+                            .setScale(1, java.math.RoundingMode.HALF_UP);
                     line.put("status", "CORRIGÉ");
                     line.put("grade", grade);
                     line.put("feedback", row.get("feedback"));

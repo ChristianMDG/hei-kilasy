@@ -96,10 +96,18 @@ public class SubmissionController {
         result.put("submittedAt", submittedAt);
         result.put("late", submittedAt.toLocalDate().isAfter(deadline));
         if (row.get("raw_points") != null) {
-            double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
-            result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            BigDecimal rawPoints = (BigDecimal) row.get("raw_points");
+            BigDecimal maxPoints = (BigDecimal) row.get("max_points");
+            // late penalty: -10% per started day late, capped at -50% (deadline = end of that day).
+            // Keep in sync with the 3 other places that compute the grade.
+            long daysLate = java.time.temporal.ChronoUnit.DAYS.between(deadline, submittedAt.toLocalDate());
+            BigDecimal penaltyPercent = BigDecimal.valueOf(Math.min(Math.max(daysLate, 0) * 10, 50));
+            BigDecimal grade = rawPoints.multiply(new BigDecimal("20"))
+                    .multiply(BigDecimal.valueOf(100).subtract(penaltyPercent))
+                    .divide(maxPoints.multiply(BigDecimal.valueOf(100)), java.math.MathContext.DECIMAL64)
+                    .setScale(1, java.math.RoundingMode.HALF_UP);
+            result.put("rawPoints", rawPoints.doubleValue());
+            result.put("grade", grade);
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -111,6 +119,7 @@ public class SubmissionController {
             return ResponseEntity.badRequest().body(Map.of("error", "points est obligatoire"));
         }
         double points = ((Number) body.get("points")).doubleValue();
+        BigDecimal rawPoints = BigDecimal.valueOf(points).setScale(2, java.math.RoundingMode.HALF_UP);
         String feedback = (String) body.get("feedback");
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -123,19 +132,26 @@ public class SubmissionController {
         }
         Map<String, Object> row = rows.get(0);
         double max = ((BigDecimal) row.get("max_points")).doubleValue();
-        if (points < 0 || points > max) {
+        BigDecimal maxPoints = BigDecimal.valueOf(max);
+        if (rawPoints.signum() < 0 || rawPoints.compareTo(maxPoints) > 0) {
             return ResponseEntity.badRequest().body(Map.of("error", "Les points doivent être entre 0 et " + max));
         }
 
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
-                points, feedback, id);
-
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
+                rawPoints, feedback, id);
 
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
         boolean late = submittedAt.toLocalDate().isAfter(deadline);
+
+        // late penalty: -10% per started day late, capped at -50% (deadline = end of that day).
+        // Keep in sync with the 3 other places that compute the grade.
+        long daysLate = java.time.temporal.ChronoUnit.DAYS.between(deadline, submittedAt.toLocalDate());
+        BigDecimal penaltyPercent = BigDecimal.valueOf(Math.min(Math.max(daysLate, 0) * 10, 50));
+        BigDecimal grade = rawPoints.multiply(new BigDecimal("20"))
+                .multiply(BigDecimal.valueOf(100).subtract(penaltyPercent))
+                .divide(maxPoints.multiply(BigDecimal.valueOf(100)), java.math.MathContext.DECIMAL64)
+                .setScale(1, java.math.RoundingMode.HALF_UP);
 
         // notify the student by email
         String fullName = (String) row.get("full_name");
@@ -157,7 +173,7 @@ public class SubmissionController {
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", id);
-        result.put("rawPoints", points);
+        result.put("rawPoints", rawPoints.doubleValue());
         result.put("maxPoints", max);
         result.put("grade", grade);
         result.put("late", late);
